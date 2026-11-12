@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LAVANDUS S.R.L. - Gestión de Personas y Roles</title>
+    <link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<div class="container">
+    <div class="nav-header" id="encabezado"></div>
+
+    <div class="section-title">Subsistema: Gestión de Personas y Roles (ABM)</div>
+    <div id="alertError" class="alert-error"></div>
+
+    <form id="formPersona" onsubmit="guardarPersona(event)" novalidate>
+        <input type="hidden" id="emailOriginal" value="">
+        <div class="grid-form caja">
+            <div class="form-group"><label for="nombre">Nombre y Apellido / Razón Social:</label>
+                <input type="text" id="nombre" placeholder="Ej: Sanatorio Central" maxlength="60"></div>
+            <div class="form-group"><label for="email">Correo Electrónico (usuario de acceso):</label>
+                <input type="email" id="email" placeholder="Ej: contacto@empresa.com" maxlength="80"></div>
+            <div class="form-group"><label for="telefono">Teléfono de Contacto:</label>
+                <input type="text" id="telefono" placeholder="Ej: 11-1234-5678" maxlength="20"></div>
+            <div class="form-group"><label for="rol">Rol asignado:</label>
+                <select id="rol">
+                    <option value="Cliente">Cliente Industrial</option>
+                    <option value="Operador">Departamento de Operaciones</option>
+                    <option value="Encargado">Encargado de Servicios (Planta)</option>
+                </select></div>
+            <div class="form-group"><label for="pass" id="lblPass">Contraseña:</label>
+                <input type="password" id="pass" placeholder="Mínimo 8 caracteres, letras y números" autocomplete="new-password"></div>
+        </div>
+        <button type="submit" class="btn btn-primary" id="btnGuardar">Registrar Persona</button>
+        <button type="button" class="btn btn-gris oculto" id="btnCancelar" onclick="cancelarEdicion()">Cancelar edición</button>
+    </form>
+
+    <div class="barra">
+        <h3 style="font-size:14px;">📋 Directorio de Personas y Usuarios</h3>
+        <input type="text" id="inputBuscar" class="buscar" onkeyup="filtrarTabla('inputBuscar','tablaBody')" placeholder="Buscar persona o rol...">
+    </div>
+    <table>
+        <thead><tr><th>Nombre / Razón Social</th><th>Correo Electrónico</th><th>Teléfono</th><th>Rol</th><th>Acciones</th></tr></thead>
+        <tbody id="tablaBody"></tbody>
+    </table>
+</div>
+
+<script src="funciones.js"></script>
+<script>
+    const usuario = requerirSesion(['Operador']);
+
+    if (usuario) {
+        renderTabla();
+        window.addEventListener('storage', renderTabla);
+    }
+
+    function tieneActivas(p) {
+        return getSolicitudes().some(s =>
+            (s.clienteEmail === p.email && !ESTADOS_FINALES.includes(s.estado)) ||
+            (s.encargadoEmail === p.email && ESTADOS_EN_PLANTA.includes(s.estado)));
+    }
+
+    function esUltimoOperador(p) {
+        return p.rol === 'Operador' && getPersonas().filter(x => x.rol === 'Operador').length === 1;
+    }
+
+    function renderTabla() {
+        const tbody = document.getElementById('tablaBody');
+        tbody.innerHTML = '';
+        getPersonas().forEach(p => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${escapeHTML(p.nombre)}</strong></td>
+                <td>${escapeHTML(p.email)}</td>
+                <td>${escapeHTML(p.telefono)}</td>
+                <td><span class="badge role-${escapeHTML(p.rol)}">${escapeHTML(ROLES[p.rol] || p.rol)}</span></td>
+                <td>
+                    <button class="btn btn-warning" onclick="editarPersona('${escapeHTML(p.email)}')">Editar</button>
+                    <button class="btn btn-danger" onclick="eliminarPersona('${escapeHTML(p.email)}')">Baja</button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+        filtrarTabla('inputBuscar', 'tablaBody');
+    }
+
+    function guardarPersona(e) {
+        e.preventDefault();
+        const original = document.getElementById('emailOriginal').value;  
+        const nombre = document.getElementById('nombre').value.trim();
+        const email = document.getElementById('email').value.trim().toLowerCase();
+        const telefono = document.getElementById('telefono').value.trim();
+        const rol = document.getElementById('rol').value;
+        const pass = document.getElementById('pass').value;
+        const lista = getPersonas();
+
+        const errores = [];
+        if (nombre.length < 3 || nombre.length > 60) errores.push('El nombre debe tener entre 3 y 60 caracteres.');
+        if (!emailValido(email)) errores.push('El correo electrónico no tiene un formato válido.');
+        else if (!original && lista.some(p => p.email === email)) errores.push('Ya existe una persona con ese correo.');
+        if (!/^[0-9+\-\s()]{8,20}$/.test(telefono)) errores.push('El teléfono debe tener entre 8 y 20 caracteres (números, +, -, espacios o paréntesis).');
+        if (!ROLES[rol]) errores.push('Rol inválido.');
+        if (!original || pass) {
+            if (pass.length < 8 || !/[A-Za-z]/.test(pass) || !/\d/.test(pass)) errores.push('La contraseña debe tener al menos 8 caracteres, con letras y números.');
+        }
+
+        if (original) {
+            const actual = lista.find(p => p.email === original);
+            if (!actual) { mostrarErrores('alertError', ['La persona ya no existe.']); return cancelarEdicion(); }
+            if (rol !== actual.rol) {
+                if (esUltimoOperador(actual)) errores.push('No se puede cambiar el rol del único Operador: el sistema quedaría sin administrador.');
+                if (tieneActivas(actual)) errores.push('No se puede cambiar el rol: la persona tiene solicitudes o trabajos en curso.');
+            }
+        }
+        if (!mostrarErrores('alertError', errores)) return;
+
+        if (!original) {
+            lista.push({ nombre, email, telefono, rol, pass });
+        } else {
+            const p = lista.find(x => x.email === original);
+            p.nombre = nombre; p.telefono = telefono; p.rol = rol;
+            if (pass) p.pass = pass;
+        }
+        guardar(K_PERSONAS, lista);
+        cancelarEdicion();
+        renderTabla();
+    }
+
+    function editarPersona(email) {
+        const p = getPersonas().find(x => x.email === email);
+        if (!p) return renderTabla();
+        document.getElementById('emailOriginal').value = p.email;
+        document.getElementById('nombre').value = p.nombre;
+        document.getElementById('email').value = p.email;
+        document.getElementById('email').readOnly = true;   
+        document.getElementById('telefono').value = p.telefono;
+        document.getElementById('rol').value = p.rol;
+        document.getElementById('pass').value = '';
+        document.getElementById('lblPass').innerText = 'Nueva contraseña (dejar vacío para no cambiarla):';
+        document.getElementById('btnGuardar').innerText = 'Actualizar Datos / Rol';
+        document.getElementById('btnCancelar').classList.remove('oculto');
+    }
+
+    function cancelarEdicion() {
+        document.getElementById('formPersona').reset();
+        document.getElementById('emailOriginal').value = '';
+        document.getElementById('email').readOnly = false;
+        document.getElementById('lblPass').innerText = 'Contraseña:';
+        document.getElementById('btnGuardar').innerText = 'Registrar Persona';
+        document.getElementById('btnCancelar').classList.add('oculto');
+    }
+
+    function eliminarPersona(email) {
+        const p = getPersonas().find(x => x.email === email);
+        if (!p) return renderTabla();
+        if (p.email === usuario.email) { alert('No podés darte de baja a vos mismo.'); return; }
+        if (esUltimoOperador(p)) { alert('No se puede dar de baja al único Operador.'); return; }
+        if (tieneActivas(p)) { alert('No se puede dar de baja: tiene solicitudes o trabajos en curso.'); return; }
+        if (!confirm(`¿Confirma dar de baja a ${p.nombre}?`)) return;
+        guardar(K_PERSONAS, getPersonas().filter(x => x.email !== email));
+        if (document.getElementById('emailOriginal').value === email) cancelarEdicion();
+        renderTabla();
+    }
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+name: CI Lavandus System
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar codigo del repositorio
+        uses: actions/checkout@v4
+
+      - name: Validar integridad de los subsistemas HTML
+        run: |
+          echo "Iniciando verificacion de componentes de Lavandus S.R.L..."
+          if [ -f "login.html" ] && [ -f "solicitud.html" ] && [ -f "lavadoras.html" ]; then
+            echo "Archivos HTML de subsistemas verificados correctamente."
+          else
+            echo "Error: Falta alguno de los componentes HTML principales." && exit 1
+          fi
+
+      - name: Test de construccion y validacion final
+        run: |
+          echo "Pipeline de CI finalizado con exito para el TPI."

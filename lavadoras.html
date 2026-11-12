@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LAVANDUS S.R.L. - Gestión de Lavadoras</title>
+    <link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<div class="container">
+    <div class="nav-header" id="encabezado"></div>
+
+    <div class="section-title">Subsistema: Gestión de Máquinas Lavadoras (ABM)</div>
+    <div id="alertError" class="alert-error"></div>
+
+    <form id="formLavadora" onsubmit="guardarLavadora(event)" novalidate>
+        <input type="hidden" id="serieOriginal" value="">
+        <div class="grid-form caja">
+            <div class="form-group"><label for="nroSerie">ID / N° de Serie:</label>
+                <input type="text" id="nroSerie" placeholder="Ej: LAV-01" maxlength="20"></div>
+            <div class="form-group"><label for="marcaModelo">Modelo de Máquina:</label>
+                <input type="text" id="marcaModelo" placeholder="Ej: Girbau HS-6057" maxlength="60"></div>
+            <div class="form-group"><label for="capacidad">Capacidad de Carga (Kg):</label>
+                <input type="number" id="capacidad" placeholder="Ej: 300"></div>
+            <div class="form-group"><label for="estado">Estado de Mantenimiento:</label>
+                <select id="estado">
+                    <option value="Operativa">Operativa</option>
+                    <option value="En Mantenimiento">En Mantenimiento</option>
+                    <option value="Fuera de Servicio">Fuera de Servicio</option>
+                </select></div>
+        </div>
+        <button type="submit" class="btn btn-primary" id="btnGuardar">Registrar Máquina</button>
+        <button type="button" class="btn btn-gris oculto" id="btnCancelar" onclick="cancelarEdicion()">Cancelar edición</button>
+    </form>
+
+    <div class="barra">
+        <h3 style="font-size:14px;">📋 Flota de Maquinarias de Planta</h3>
+        <input type="text" id="inputBuscar" class="buscar" onkeyup="filtrarTabla('inputBuscar','tablaBody')" placeholder="Buscar máquina...">
+    </div>
+    <table>
+        <thead><tr><th>Nº Serie</th><th>Modelo y Marca</th><th>Capacidad</th><th>Estado Mantenimiento</th><th>Acciones</th></tr></thead>
+        <tbody id="tablaBody"></tbody>
+    </table>
+</div>
+
+<script src="funciones.js"></script>
+<script>
+    const usuario = requerirSesion(['Operador']);
+    const ESTADOS = ['Operativa', 'En Mantenimiento', 'Fuera de Servicio'];
+
+    if (usuario) {
+        renderTabla();
+        window.addEventListener('storage', renderTabla);
+    }
+
+    function enUso(serie) {
+        return getSolicitudes().some(s => s.maquinaSerie === serie && ESTADOS_EN_PLANTA.includes(s.estado));
+    }
+
+    function renderTabla() {
+        const tbody = document.getElementById('tablaBody');
+        const lista = getMaquinas();
+        tbody.innerHTML = lista.length ? '' : '<tr><td colspan="5">No hay máquinas registradas.</td></tr>';
+        lista.forEach(m => {
+            const clase = m.estado === 'Operativa' ? 'op' : (m.estado === 'En Mantenimiento' ? 'mant' : 'fuera');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${escapeHTML(m.nroSerie)}</strong></td>
+                <td>${escapeHTML(m.marcaModelo)}</td>
+                <td>${m.capacidad} Kg</td>
+                <td><span class="badge ${clase}">${escapeHTML(m.estado)}</span></td>
+                <td>
+                    <button class="btn btn-warning" onclick="editarLavadora('${escapeHTML(m.nroSerie)}')">Editar</button>
+                    <button class="btn btn-danger" onclick="eliminarLavadora('${escapeHTML(m.nroSerie)}')">Eliminar</button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+        filtrarTabla('inputBuscar', 'tablaBody');
+    }
+
+    function guardarLavadora(e) {
+        e.preventDefault();
+        const original = document.getElementById('serieOriginal').value;  
+        const serie = document.getElementById('nroSerie').value.trim().toUpperCase();
+        const modelo = document.getElementById('marcaModelo').value.trim();
+        const cap = document.getElementById('capacidad').value.trim();
+        const estado = document.getElementById('estado').value;
+        const lista = getMaquinas();
+
+        const errores = [];
+        if (!/^[A-Z0-9-]{3,20}$/.test(serie)) errores.push('El N° de serie debe tener 3 a 20 caracteres (letras, números o guion).');
+        else if (!original && lista.some(m => m.nroSerie === serie)) errores.push('Ya existe una máquina con ese N° de serie.');
+        if (modelo.length < 3 || modelo.length > 60) errores.push('El modelo debe tener entre 3 y 60 caracteres.');
+        if (!enteroEnRango(cap, 1, 5000)) errores.push('La capacidad debe ser un número entero entre 1 y 5000 Kg.');
+        if (!ESTADOS.includes(estado)) errores.push('Estado de mantenimiento inválido.');
+        if (original && estado !== 'Operativa' && enUso(original)) errores.push('No se puede sacar de servicio una máquina que está en uso en un trabajo.');
+        if (!mostrarErrores('alertError', errores)) return;
+
+        const nueva = { nroSerie: serie, marcaModelo: modelo, capacidad: Number(cap), estado };
+        if (!original) lista.push(nueva);
+        else {
+            const i = lista.findIndex(m => m.nroSerie === original);
+            if (i === -1) { mostrarErrores('alertError', ['La máquina ya no existe.']); return cancelarEdicion(); }
+            lista[i] = nueva;
+        }
+        guardar(K_MAQUINAS, lista);
+        cancelarEdicion();
+        renderTabla();
+    }
+
+    function editarLavadora(serie) {
+        const m = getMaquinas().find(x => x.nroSerie === serie);
+        if (!m) return renderTabla();
+        document.getElementById('serieOriginal').value = m.nroSerie;
+        document.getElementById('nroSerie').value = m.nroSerie;
+        document.getElementById('nroSerie').readOnly = true;   
+        document.getElementById('marcaModelo').value = m.marcaModelo;
+        document.getElementById('capacidad').value = m.capacidad;
+        document.getElementById('estado').value = m.estado;
+        document.getElementById('btnGuardar').innerText = 'Actualizar Máquina';
+        document.getElementById('btnCancelar').classList.remove('oculto');
+    }
+
+    function cancelarEdicion() {
+        document.getElementById('formLavadora').reset();
+        document.getElementById('serieOriginal').value = '';
+        document.getElementById('nroSerie').readOnly = false;
+        document.getElementById('btnGuardar').innerText = 'Registrar Máquina';
+        document.getElementById('btnCancelar').classList.add('oculto');
+    }
+
+    function eliminarLavadora(serie) {
+        if (enUso(serie)) { alert('No se puede eliminar: la máquina está asignada a un trabajo en planta.'); return; }
+        if (!confirm(`¿Confirma eliminar la lavadora ${serie}?`)) return;
+        guardar(K_MAQUINAS, getMaquinas().filter(m => m.nroSerie !== serie));
+        if (document.getElementById('serieOriginal').value === serie) cancelarEdicion();
+        renderTabla();
+    }
+</script>
+</body>
+</html>

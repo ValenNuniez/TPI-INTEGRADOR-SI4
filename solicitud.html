@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LAVANDUS S.R.L. - Gestión de Solicitudes</title>
+    <link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<div class="container">
+    <div class="nav-header" id="encabezado"></div>
+
+    <div id="alertError" class="alert-error"></div>
+
+    <div id="panelCliente" class="role-panel oculto">
+        <div class="role-title">Solicitar Servicio de Lavado Industrial</div>
+        <form onsubmit="crearSolicitud(event)" novalidate class="grid-form">
+            <div class="form-group">
+                <label>Tipo de Prenda / Lote:</label>
+                <select id="tipoPrenda">
+                    <option>Sábanas y Mantelería Hospitalaria</option>
+                    <option>Indumentaria Industrial y Overoles</option>
+                    <option>Toallas y Lencería de Spa</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Volumen Estimado (Kg):</label>
+                <input type="number" id="pesoKg" value="150">
+            </div>
+            <div class="form-group">
+                <label>Dirección de Recolección:</label>
+                <input type="text" id="direccion" placeholder="Ej: Av. Corrientes 1234, CABA">
+            </div>
+            <div class="form-group" style="align-self:flex-end;">
+                <button type="submit" class="btn btn-success" style="width:100%;padding:9px;">Enviar Solicitud</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="panelOperaciones" class="role-panel oculto" style="border-left-color:#0284c7;">
+        <div class="role-title">Panel de Operaciones — Evaluación, Asignación y Facturación</div>
+        <p style="font-size:11px;color:#475569;">Evalúe solicitudes, acepte o rechace pedidos, asigne lavadora y encargado, y emita la factura.</p>
+    </div>
+
+    <div id="panelEncargado" class="role-panel oculto" style="border-left-color:#d97706;">
+        <div class="role-title">Panel de Encargado de Planta — Control de Procesos e Insumos</div>
+        <p style="font-size:11px;color:#475569;">Aquí ve solo los trabajos que le asignaron. Inicie el lavado y registre insumos y tiempo al finalizar.</p>
+    </div>
+
+    <div id="panelAsignar" class="caja oculto" style="margin-bottom:15px;">
+        <div class="role-title" id="tituloAsignar"></div>
+        <div id="alertAsignar" class="alert-error"></div>
+        <div class="grid-form">
+            <div class="form-group"><label>Máquina lavadora (operativa, libre y con capacidad suficiente):</label><select id="selMaquina"></select></div>
+            <div class="form-group"><label>Encargado de servicio:</label><select id="selEncargado"></select></div>
+        </div>
+        <button class="btn btn-primary" onclick="confirmarAsignar()">Confirmar asignación</button>
+        <button class="btn btn-gris" onclick="cerrarPaneles()">Cancelar</button>
+    </div>
+
+    <div id="panelFinalizar" class="caja oculto" style="margin-bottom:15px;">
+        <div class="role-title" id="tituloFinalizar"></div>
+        <div id="alertFinalizar" class="alert-error"></div>
+        <div class="grid-form">
+            <div class="form-group"><label>Insumos consumidos:</label><input type="text" id="insumos" placeholder="Ej: Detergente 4L, Suavizante 2L" maxlength="100"></div>
+            <div class="form-group"><label>Tiempo empleado (minutos):</label><input type="number" id="tiempo" placeholder="Ej: 45"></div>
+        </div>
+        <button class="btn btn-success" onclick="confirmarFinalizar()">Registrar finalización</button>
+        <button class="btn btn-gris" onclick="cerrarPaneles()">Cancelar</button>
+    </div>
+
+    <div class="barra">
+        <h3 style="font-size:14px;">📋 Historial y Trazabilidad del Servicio</h3>
+        <input type="text" id="inputBuscar" class="buscar" onkeyup="filtrarTabla('inputBuscar','tablaBody')" placeholder="Buscar en el historial...">
+    </div>
+    <table>
+        <thead><tr><th>Código</th><th>Cliente</th><th>Detalle Lote</th><th>Lavadora / Encargado</th><th>Insumos / Tiempo</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody id="tablaBody"></tbody>
+    </table>
+</div>
+
+<script src="funciones.js"></script>
+<script>
+    const usuario = requerirSesion(null);  
+
+    const TRANSICIONES = {
+        Cliente:   { 'Solicitado': ['Cancelado'] },
+        Operador:  { 'Solicitado': ['Pendiente'], 'Pendiente': ['Aceptado', 'Rechazado'] },
+        Encargado: { 'Programado': ['En proceso'] }
+    };
+    const ETIQUETAS = { 'Cancelado': 'Cancelar', 'Pendiente': 'Evaluar', 'Aceptado': 'Aceptar', 'Rechazado': 'Rechazar', 'En proceso': 'Iniciar Lavado' };
+    const PRENDAS = ['Sábanas y Mantelería Hospitalaria', 'Indumentaria Industrial y Overoles', 'Toallas y Lencería de Spa'];
+    let solicitudActual = null;
+
+    if (usuario) {
+        document.getElementById('panel' + (usuario.rol === 'Operador' ? 'Operaciones' : usuario.rol)).classList.remove('oculto');
+        renderizar();
+        window.addEventListener('storage', renderizar);
+    }
+
+    function autorizado(s) {
+        if (usuario.rol === 'Operador') return true;
+        if (usuario.rol === 'Cliente') return s.clienteEmail === usuario.email;
+        if (usuario.rol === 'Encargado') return s.encargadoEmail === usuario.email;
+        return false;
+    }
+
+    function textoMaquina(serie) {
+        if (!serie) return '-';
+        const m = getMaquinas().find(x => x.nroSerie === serie);
+        return m ? `${m.nroSerie} (${m.marcaModelo})` : serie;
+    }
+
+    function renderizar() {
+        const tbody = document.getElementById('tablaBody');
+        const lista = getSolicitudes().filter(autorizado);
+        tbody.innerHTML = lista.length ? '' : '<tr><td colspan="7">No hay solicitudes para mostrar.</td></tr>';
+
+        lista.forEach(s => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${escapeHTML(s.id)}</strong></td>
+                <td>${escapeHTML(nombreDe(s.clienteEmail))}</td>
+                <td>${escapeHTML(s.tipoPrenda)} (${s.pesoKg} Kg)<br><small>📍 ${escapeHTML(s.direccion)}</small></td>
+                <td><small>🤖 ${escapeHTML(textoMaquina(s.maquinaSerie))}<br>👤 ${escapeHTML(s.encargadoEmail ? nombreDe(s.encargadoEmail) : '-')}</small></td>
+                <td><small>🧴 ${escapeHTML(s.insumos || '-')}<br>⏱️ ${s.tiempoMin > 0 ? s.tiempoMin + ' min' : '-'}</small></td>
+                <td><span class="badge st-${escapeHTML(s.estado.replace(/\s+/g, ''))}">${escapeHTML(s.estado)}</span></td>
+                <td>${botones(s)}</td>`;
+            tbody.appendChild(tr);
+        });
+        filtrarTabla('inputBuscar', 'tablaBody');
+    }
+
+    function botones(s) {
+        let h = '';
+        const permitidos = (TRANSICIONES[usuario.rol] || {})[s.estado] || [];
+        permitidos.forEach(n => {
+            const clase = (n === 'Rechazado' || n === 'Cancelado') ? 'btn-danger' : (n === 'Aceptado' ? 'btn-success' : 'btn-info');
+            h += `<button class="btn ${clase}" onclick="cambiarEstado('${s.id}','${n}')">${ETIQUETAS[n]}</button>`;
+        });
+        if (usuario.rol === 'Operador' && s.estado === 'Aceptado') h += `<button class="btn btn-warning" onclick="abrirAsignar('${s.id}')">Asignar Recursos</button>`;
+        if (usuario.rol === 'Operador' && s.estado === 'Terminado') h += `<button class="btn btn-primary" onclick="emitirFactura('${s.id}')">Emitir Factura</button>`;
+        if (usuario.rol === 'Encargado' && s.estado === 'En proceso') h += `<button class="btn btn-success" onclick="abrirFinalizar('${s.id}')">Finalizar e Insumos</button>`;
+        return h || '<small style="color:#94a3b8;">Sin acciones</small>';
+    }
+
+    function crearSolicitud(e) {
+        e.preventDefault();
+        if (usuario.rol !== 'Cliente') return;
+        const tipo = document.getElementById('tipoPrenda').value;
+        const peso = document.getElementById('pesoKg').value.trim();
+        const dir = document.getElementById('direccion').value.trim();
+
+        const errores = [];
+        if (!PRENDAS.includes(tipo)) errores.push('Seleccioná un tipo de prenda válido.');
+        if (!enteroEnRango(peso, 1, 5000)) errores.push('El volumen debe ser un número entero entre 1 y 5000 Kg.');
+        if (dir.length < 5) errores.push('Ingresá la dirección de recolección (mínimo 5 caracteres).');
+        else if (dir.length > 100) errores.push('La dirección no puede superar los 100 caracteres.');
+        if (!mostrarErrores('alertError', errores)) return;
+
+        const lista = getSolicitudes();
+        const maxNum = lista.reduce((m, s) => Math.max(m, parseInt(s.id.replace('SOL-', '')) || 0), 1000);
+        lista.unshift({
+            id: 'SOL-' + (maxNum + 1), clienteEmail: usuario.email, tipoPrenda: tipo, pesoKg: Number(peso),
+            direccion: dir, estado: 'Solicitado', maquinaSerie: '', encargadoEmail: '', insumos: '', tiempoMin: 0
+        });
+        guardar(K_SOLICITUDES, lista);
+        document.getElementById('direccion').value = '';
+        renderizar();
+    }
+
+    function cambiarEstado(id, nuevo) {
+        const lista = getSolicitudes();
+        const s = lista.find(x => x.id === id);
+        if (!s || !autorizado(s)) { alert('No tenés permiso para operar sobre esta solicitud.'); return renderizar(); }
+        const permitidos = (TRANSICIONES[usuario.rol] || {})[s.estado] || [];
+        if (!permitidos.includes(nuevo)) { alert('Ese cambio de estado no está permitido (el estado pudo haber cambiado).'); return renderizar(); }
+        s.estado = nuevo;
+        guardar(K_SOLICITUDES, lista);
+        renderizar();
+    }
+
+    function maquinasLibres(s) {
+        const ocupadas = getSolicitudes().filter(x => ESTADOS_EN_PLANTA.includes(x.estado)).map(x => x.maquinaSerie);
+        return getMaquinas().filter(m => m.estado === 'Operativa' && m.capacidad >= s.pesoKg && !ocupadas.includes(m.nroSerie));
+    }
+
+    function abrirAsignar(id) {
+        const s = getSolicitudes().find(x => x.id === id);
+        if (usuario.rol !== 'Operador' || !s || s.estado !== 'Aceptado') return;
+        cerrarPaneles();
+        const libres = maquinasLibres(s);
+        const encargados = getPersonas().filter(p => p.rol === 'Encargado');
+        solicitudActual = id;
+        document.getElementById('tituloAsignar').textContent = `Asignar recursos a ${id} (${s.pesoKg} Kg)`;
+        document.getElementById('selMaquina').innerHTML = libres.map(m => `<option value="${escapeHTML(m.nroSerie)}">${escapeHTML(m.nroSerie)} - ${escapeHTML(m.marcaModelo)} (${m.capacidad} Kg)</option>`).join('');
+        document.getElementById('selEncargado').innerHTML = encargados.map(p => `<option value="${escapeHTML(p.email)}">${escapeHTML(p.nombre)}</option>`).join('');
+        document.getElementById('panelAsignar').classList.remove('oculto');
+        const errores = [];
+        if (!libres.length) errores.push('No hay máquinas operativas, libres y con capacidad suficiente para este lote.');
+        if (!encargados.length) errores.push('No hay encargados registrados en el sistema.');
+        mostrarErrores('alertAsignar', errores);
+    }
+
+    function confirmarAsignar() {
+        const lista = getSolicitudes();
+        const s = lista.find(x => x.id === solicitudActual);
+        if (usuario.rol !== 'Operador' || !s || s.estado !== 'Aceptado') return cerrarPaneles();
+        const serie = document.getElementById('selMaquina').value;
+        const enc = document.getElementById('selEncargado').value;
+
+        const errores = [];
+        if (!serie || !maquinasLibres(s).some(m => m.nroSerie === serie)) errores.push('Elegí una máquina válida y disponible.');
+        const p = getPersonas().find(x => x.email === enc);
+        if (!p || p.rol !== 'Encargado') errores.push('Elegí un encargado válido.');
+        if (!mostrarErrores('alertAsignar', errores)) return;
+
+        s.maquinaSerie = serie;
+        s.encargadoEmail = enc;
+        s.estado = 'Programado';
+        guardar(K_SOLICITUDES, lista);
+        cerrarPaneles();
+        renderizar();
+    }
+
+    function abrirFinalizar(id) {
+        const s = getSolicitudes().find(x => x.id === id);
+        if (!s || !autorizado(s) || usuario.rol !== 'Encargado' || s.estado !== 'En proceso') return;
+        cerrarPaneles();
+        solicitudActual = id;
+        document.getElementById('tituloFinalizar').textContent = `Finalizar trabajo ${id}`;
+        document.getElementById('insumos').value = '';
+        document.getElementById('tiempo').value = '';
+        document.getElementById('alertFinalizar').style.display = 'none';
+        document.getElementById('panelFinalizar').classList.remove('oculto');
+    }
+
+    function confirmarFinalizar() {
+        const lista = getSolicitudes();
+        const s = lista.find(x => x.id === solicitudActual);
+        if (!s || !autorizado(s) || usuario.rol !== 'Encargado' || s.estado !== 'En proceso') return cerrarPaneles();
+        const insumos = document.getElementById('insumos').value.trim();
+        const tiempo = document.getElementById('tiempo').value.trim();
+
+        const errores = [];
+        if (insumos.length < 3) errores.push('Indicá los insumos consumidos (mínimo 3 caracteres).');
+        if (!enteroEnRango(tiempo, 1, 1440)) errores.push('El tiempo debe ser un número entero de minutos entre 1 y 1440.');
+        if (!mostrarErrores('alertFinalizar', errores)) return;
+
+        s.insumos = insumos;
+        s.tiempoMin = Number(tiempo);
+        s.estado = 'Terminado';
+        guardar(K_SOLICITUDES, lista);
+        cerrarPaneles();
+        renderizar();
+    }
+
+    function emitirFactura(id) {
+        const lista = getSolicitudes();
+        const s = lista.find(x => x.id === id);
+        if (usuario.rol !== 'Operador' || !s || s.estado !== 'Terminado') return renderizar();
+        s.estado = 'Facturado';
+        guardar(K_SOLICITUDES, lista);
+        renderizar();
+        alert(`Factura generada y enviada a ${nombreDe(s.clienteEmail)}.`);
+    }
+
+    function cerrarPaneles() {
+        document.getElementById('panelAsignar').classList.add('oculto');
+        document.getElementById('panelFinalizar').classList.add('oculto');
+        solicitudActual = null;
+    }
+</script>
+</body>
+</html>
